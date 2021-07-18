@@ -11,6 +11,7 @@ import (
 
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/crypto/tmhash"
+	"github.com/tendermint/tendermint/internal/test/factory"
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/privval"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
@@ -42,15 +43,15 @@ func InjectEvidence(testnet *e2e.Testnet, amount int) error {
 	if err != nil {
 		return err
 	}
-	lightEvidenceCommonHeight := blockRes.Block.Height
+	evidenceHeight := blockRes.Block.Height
 	waitHeight := blockRes.Block.Height + 3
-	duplicateVoteHeight := waitHeight
 
 	nValidators := 100
-	valRes, err := client.Validators(context.Background(), &lightEvidenceCommonHeight, nil, &nValidators)
+	valRes, err := client.Validators(context.Background(), &evidenceHeight, nil, &nValidators)
 	if err != nil {
 		return err
 	}
+
 	valSet, err := types.ValidatorSetFromExistingValidators(valRes.Validators)
 	if err != nil {
 		return err
@@ -64,21 +65,20 @@ func InjectEvidence(testnet *e2e.Testnet, amount int) error {
 
 	// wait for the node to reach the height above the forged height so that
 	// it is able to validate the evidence
-	status, err := waitForNode(targetNode, waitHeight, 10*time.Second)
+	_, err = waitForNode(targetNode, waitHeight, 30*time.Second)
 	if err != nil {
 		return err
 	}
-	duplicateVoteTime := status.SyncInfo.LatestBlockTime
 
 	var ev types.Evidence
 	for i := 1; i <= amount; i++ {
 		if i%lightClientEvidenceRatio == 0 {
 			ev, err = generateLightClientAttackEvidence(
-				privVals, lightEvidenceCommonHeight, valSet, testnet.Name, blockRes.Block.Time,
+				privVals, evidenceHeight, valSet, testnet.Name, blockRes.Block.Time,
 			)
 		} else {
 			ev, err = generateDuplicateVoteEvidence(
-				privVals, duplicateVoteHeight, valSet, testnet.Name, duplicateVoteTime,
+				privVals, evidenceHeight, valSet, testnet.Name, blockRes.Block.Time,
 			)
 		}
 		if err != nil {
@@ -142,7 +142,7 @@ func generateLightClientAttackEvidence(
 	// create a commit for the forged header
 	blockID := makeBlockID(header.Hash(), 1000, []byte("partshash"))
 	voteSet := types.NewVoteSet(chainID, forgedHeight, 0, tmproto.SignedMsgType(2), conflictingVals)
-	commit, err := types.MakeCommit(blockID, forgedHeight, 0, voteSet, pv, forgedTime)
+	commit, err := factory.MakeCommit(blockID, forgedHeight, 0, voteSet, pv, forgedTime)
 	if err != nil {
 		return nil, err
 	}
@@ -176,11 +176,13 @@ func generateDuplicateVoteEvidence(
 ) (*types.DuplicateVoteEvidence, error) {
 	// nolint:gosec // G404: Use of weak random number generator
 	privVal := privVals[rand.Intn(len(privVals))]
-	voteA, err := types.MakeVote(height, makeRandomBlockID(), vals, privVal, chainID, time)
+
+	valIdx, _ := vals.GetByAddress(privVal.PrivKey.PubKey().Address())
+	voteA, err := factory.MakeVote(privVal, chainID, valIdx, height, 0, 2, makeRandomBlockID(), time)
 	if err != nil {
 		return nil, err
 	}
-	voteB, err := types.MakeVote(height, makeRandomBlockID(), vals, privVal, chainID, time)
+	voteB, err := factory.MakeVote(privVal, chainID, valIdx, height, 0, 2, makeRandomBlockID(), time)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +244,7 @@ func makeBlockID(hash []byte, partSetSize uint32, partSetHash []byte) types.Bloc
 
 func mutateValidatorSet(privVals []types.MockPV, vals *types.ValidatorSet,
 ) ([]types.PrivValidator, *types.ValidatorSet, error) {
-	newVal, newPrivVal := types.RandValidator(false, 10)
+	newVal, newPrivVal := factory.RandValidator(false, 10)
 
 	var newVals *types.ValidatorSet
 	if vals.Size() > 2 {

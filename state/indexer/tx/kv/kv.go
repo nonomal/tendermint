@@ -58,25 +58,25 @@ func (txi *TxIndex) Get(hash []byte) (*abci.TxResult, error) {
 	return txResult, nil
 }
 
-// AddBatch indexes a batch of transactions using the given list of events. Each
-// key that indexed from the tx's events is a composite of the event type and
-// the respective attribute's key delimited by a "." (eg. "account.number").
+// Index indexes transactions using the given list of events. Each key
+// that indexed from the tx's events is a composite of the event type and the
+// respective attribute's key delimited by a "." (eg. "account.number").
 // Any event with an empty type is not indexed.
-func (txi *TxIndex) AddBatch(b *indexer.Batch) error {
-	storeBatch := txi.store.NewBatch()
-	defer storeBatch.Close()
+func (txi *TxIndex) Index(results []*abci.TxResult) error {
+	b := txi.store.NewBatch()
+	defer b.Close()
 
-	for _, result := range b.Ops {
+	for _, result := range results {
 		hash := types.Tx(result.Tx).Hash()
 
 		// index tx by events
-		err := txi.indexEvents(result, hash, storeBatch)
+		err := txi.indexEvents(result, hash, b)
 		if err != nil {
 			return err
 		}
 
 		// index by height (always)
-		err = storeBatch.Set(keyFromHeight(result), hash)
+		err = b.Set(KeyFromHeight(result), hash)
 		if err != nil {
 			return err
 		}
@@ -86,45 +86,10 @@ func (txi *TxIndex) AddBatch(b *indexer.Batch) error {
 			return err
 		}
 		// index by hash (always)
-		err = storeBatch.Set(primaryKey(hash), rawBytes)
+		err = b.Set(primaryKey(hash), rawBytes)
 		if err != nil {
 			return err
 		}
-	}
-
-	return storeBatch.WriteSync()
-}
-
-// Index indexes a single transaction using the given list of events. Each key
-// that indexed from the tx's events is a composite of the event type and the
-// respective attribute's key delimited by a "." (eg. "account.number").
-// Any event with an empty type is not indexed.
-func (txi *TxIndex) Index(result *abci.TxResult) error {
-	b := txi.store.NewBatch()
-	defer b.Close()
-
-	hash := types.Tx(result.Tx).Hash()
-
-	// index tx by events
-	err := txi.indexEvents(result, hash, b)
-	if err != nil {
-		return err
-	}
-
-	// index by height (always)
-	err = b.Set(keyFromHeight(result), hash)
-	if err != nil {
-		return err
-	}
-
-	rawBytes, err := proto.Marshal(result)
-	if err != nil {
-		return err
-	}
-	// index by hash (always)
-	err = b.Set(primaryKey(hash), rawBytes)
-	if err != nil {
-		return err
 	}
 
 	return b.WriteSync()
@@ -143,7 +108,7 @@ func (txi *TxIndex) indexEvents(result *abci.TxResult, hash []byte, store dbm.Ba
 			}
 
 			// index if `index: true` is set
-			compositeTag := fmt.Sprintf("%s.%s", event.Type, string(attr.Key))
+			compositeTag := fmt.Sprintf("%s.%s", event.Type, attr.Key)
 			// ensure event does not conflict with a reserved prefix key
 			if compositeTag == types.TxHashKey || compositeTag == types.TxHeightKey {
 				return fmt.Errorf("event type and attribute key \"%s\" is reserved; please use a different key", compositeTag)
@@ -580,11 +545,11 @@ func parseValueFromKey(key []byte) (string, error) {
 	return value, nil
 }
 
-func keyFromEvent(compositeKey string, value []byte, result *abci.TxResult) []byte {
-	return secondaryKey(compositeKey, string(value), result.Height, result.Index)
+func keyFromEvent(compositeKey string, value string, result *abci.TxResult) []byte {
+	return secondaryKey(compositeKey, value, result.Height, result.Index)
 }
 
-func keyFromHeight(result *abci.TxResult) []byte {
+func KeyFromHeight(result *abci.TxResult) []byte {
 	return secondaryKey(types.TxHeightKey, fmt.Sprintf("%d", result.Height), result.Height, result.Index)
 }
 
